@@ -2,19 +2,33 @@ const video = document.getElementById('webcam');
 const canvas = document.getElementById('pianoCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- PREMIUM PIANO LAYOUT ---
-const whiteKeys = [
-    { note: 'C', label: 'C' }, { note: 'D', label: 'D' },
-    { note: 'E', label: 'E' }, { note: 'F', label: 'F' },
-    { note: 'G', label: 'G' }, { note: 'A', label: 'A' },
-    { note: 'B', label: 'B' }
-];
+// --- FULL PIANO LAYOUT (88 Keys) ---
+const whiteNotes = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+let whiteKeys = [];
+let blackKeys = [];
 
-const blackKeys = [
-    { note: 'C#', pos: 1 }, { note: 'D#', pos: 2 },
-    { note: 'F#', pos: 4 }, { note: 'G#', pos: 5 },
-    { note: 'A#', pos: 6 }
-];
+// Generate full piano keys
+for (let octave = 0; octave < 8; octave++) {
+    whiteNotes.forEach(note => {
+        // Stop at C8
+        if (octave === 7 && ['D', 'E', 'F', 'G', 'A', 'B'].includes(note)) return;
+        whiteKeys.push({ note: note + octave, label: note });
+    });
+}
+
+// Generate black keys based on white keys positioning
+for (let i = 0; i < whiteKeys.length; i++) {
+    const noteName = whiteKeys[i].note[0];
+    // Black keys are usually between C-D, D-E, F-G, G-A, A-B
+    if (['C', 'D', 'F', 'G', 'A'].includes(noteName)) {
+        if (i + 1 < whiteKeys.length) {
+            blackKeys.push({
+                note: whiteKeys[i].note[0] + '#' + whiteKeys[i].note.slice(-1),
+                leftWhiteKeyIndex: i
+            });
+        }
+    }
+}
 
 let activeKeys = new Set();
 let floatingNotes = []; 
@@ -46,15 +60,16 @@ function onResults(results) {
     if (results.image) {
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
     }
+    ctx.globalAlpha = 1.0;
 
-    // 2. DIMENSIONS
+    // 2. DIMENSIONS FOR MANY KEYS
     const wKeyWidth = canvas.width / whiteKeys.length;
-    const bKeyWidth = wKeyWidth * 0.55;
+    const bKeyWidth = wKeyWidth * 0.6; 
     const pianoY = canvas.height - 300;
     const chassisHeight = 220;
     const bKeyHeight = 160;
 
-    // --- DRAW PREMIUM CASIO CHASSIS ---
+    // --- DRAW CASIO CHASSIS ---
     ctx.fillStyle = "#111111";
     ctx.beginPath();
     ctx.roundRect(0, pianoY - chassisHeight, canvas.width, chassisHeight, [20, 20, 0, 0]);
@@ -77,18 +92,20 @@ function onResults(results) {
     ctx.scale(-1, 1);
     ctx.fillStyle = "#00e5ff";
     ctx.font = "14px Courier New";
-    ctx.fillText("STAGE PIANO 01", -(canvas.width/2 + 60), pianoY - 135);
+    ctx.textAlign = "center";
+    ctx.fillText("FULL PIANO 88", -(canvas.width/2), pianoY - 135);
     ctx.restore();
 
-    const currentlyDetectedNotes = new Set();
-
-    // 3. HAND MAPPING
+    // 3. HAND MAPPING (Pakka - Strict Detection)
+    const detectedNoteThisFrame = new Set();
+    
     if (results.multiHandLandmarks) {
         for (const landmarks of results.multiHandLandmarks) {
             const indexTip = landmarks[8];
             const x = indexTip.x * canvas.width;
             const y = indexTip.y * canvas.height;
 
+            // Draw finger dot
             ctx.shadowBlur = 20;
             ctx.shadowColor = "#ff0055";
             ctx.fillStyle = "white";
@@ -99,66 +116,93 @@ function onResults(results) {
 
             if (y > pianoY) {
                 let hitNote = null;
-                blackKeys.forEach(bk => {
-                    const bx = (bk.pos * wKeyWidth) - (bKeyWidth / 2);
+                
+                // Priority 1: Check Black Keys (higher layer)
+                for (let bk of blackKeys) {
+                    const leftWhiteKeyX = bk.leftWhiteKeyIndex * wKeyWidth;
+                    const bx = leftWhiteKeyX + (wKeyWidth * 0.7);
+                    
                     if (x > bx && x < bx + bKeyWidth && y < pianoY + bKeyHeight) {
                         hitNote = bk.note;
+                        break;
                     }
-                });
+                }
+                
+                // Priority 2: Check White Keys
                 if (!hitNote) {
                     const keyIndex = Math.floor(indexTip.x * whiteKeys.length);
                     if (whiteKeys[keyIndex]) hitNote = whiteKeys[keyIndex].note;
                 }
-                if (hitNote) currentlyDetectedNotes.add(hitNote);
+                
+                if (hitNote) detectedNoteThisFrame.add(hitNote);
             }
         }
     }
 
     // 4. DRAW PIANO KEYS
+    // White Keys
     whiteKeys.forEach((key, i) => {
         const x = i * wKeyWidth;
-        const isPressed = activeKeys.has(key.note);
-        ctx.fillStyle = isPressed ? "#e0e0e0" : "#ffffff";
+        const isPressed = detectedNoteThisFrame.has(key.note);
+        
+        // --- COLOR CHANGE LOGIC ---
+        ctx.fillStyle = isPressed ? "#a0d2eb" : "#ffffff"; // Light blue when pressed
         ctx.strokeStyle = "#333";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.roundRect(x, pianoY, wKeyWidth, 300, [0, 0, 5, 5]);
         ctx.fill();
         ctx.stroke();
+
+        // Draw Letters
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.fillStyle = isPressed ? "#000" : "#555";
+        ctx.font = "bold 10px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(key.label, -(x + wKeyWidth/2), pianoY + 280);
+        ctx.restore();
     });
 
+    // Black Keys
     blackKeys.forEach(bk => {
-        const bx = (bk.pos * wKeyWidth) - (bKeyWidth / 2);
-        const isPressed = activeKeys.has(bk.note);
-        ctx.fillStyle = isPressed ? "#444444" : "#222222";
+        const leftWhiteKeyX = bk.leftWhiteKeyIndex * wKeyWidth;
+        const bx = leftWhiteKeyX + (wKeyWidth * 0.7);
+        const isPressed = detectedNoteThisFrame.has(bk.note);
+        
+        // --- COLOR CHANGE LOGIC ---
+        ctx.fillStyle = isPressed ? "#888888" : "#222222"; // Light grey when pressed
         ctx.beginPath();
         ctx.roundRect(bx, pianoY, bKeyWidth, bKeyHeight, [0, 0, 3, 3]);
         ctx.fill();
         ctx.strokeStyle = "rgba(255,255,255,0.2)";
-        ctx.strokeRect(bx + 5, pianoY, bKeyWidth - 10, bKeyHeight - 10);
+        ctx.strokeRect(bx + 2, pianoY, bKeyWidth - 4, bKeyHeight - 5);
     });
 
-    // 5. AUDIO LOGIC & KEY-POSITIONED FLOATING NOTES
-    const allNotes = [...whiteKeys.map((k, i) => ({...k, x: i * wKeyWidth + wKeyWidth/2})), 
-                      ...blackKeys.map(bk => ({...bk, x: bk.pos * wKeyWidth}))];
+    // 5. AUDIO LOGIC & FLOATING NOTES
+    const allNotesMap = new Map();
+    whiteKeys.forEach((k, i) => allNotesMap.set(k.note, {x: i * wKeyWidth + wKeyWidth/2, type: 'white'}));
+    blackKeys.forEach(bk => {
+        const leftWhiteKeyX = bk.leftWhiteKeyIndex * wKeyWidth;
+        allNotesMap.set(bk.note, {x: leftWhiteKeyX + (wKeyWidth * 0.7) + bKeyWidth/2, type: 'black'});
+    });
 
-    allNotes.forEach(keyObj => {
-        const note = keyObj.note;
-        if (currentlyDetectedNotes.has(note) && !activeKeys.has(note)) {
+    allNotesMap.forEach((pos, note) => {
+        if (detectedNoteThisFrame.has(note) && !activeKeys.has(note)) {
             Tone.start(); 
-            synth.triggerAttack(note + "4");
+            synth.triggerAttack(note);
             activeKeys.add(note);
 
-            // SPAWN NOTE EXACTLY ABOVE THE KEY
+            // Spawn floating note
             floatingNotes.push({
                 text: note,
-                x: keyObj.x,      // Use the key's specific X position
-                y: pianoY - 20,    // Start just above the key
+                x: pos.x,
+                y: pianoY - 20,
                 alpha: 1.0,
-                size: 30
+                size: 20
             });
-        } else if (!currentlyDetectedNotes.has(note) && activeKeys.has(note)) {
-            synth.triggerRelease(note + "4");
+        } else if (!detectedNoteThisFrame.has(note) && activeKeys.has(note)) {
+            synth.triggerRelease(note);
             activeKeys.delete(note);
         }
     });
@@ -176,9 +220,8 @@ function onResults(results) {
         
         ctx.fillText(fn.text, -fn.x, fn.y);
         
-        fn.y -= 3;          // Float UP
-        fn.alpha -= 0.02;    // Fade OUT
-        fn.size += 0.5;      // Grow slightly
+        fn.y -= 3;
+        fn.alpha -= 0.02;
 
         if (fn.alpha <= 0) {
             floatingNotes.splice(index, 1);
